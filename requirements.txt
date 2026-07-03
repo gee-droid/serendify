@@ -1,0 +1,7 @@
+spotipy
+flask
+python-dotenv
+
+Then run:
+
+pip install -r requirements.txt
