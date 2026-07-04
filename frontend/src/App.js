@@ -13,6 +13,21 @@ function App() {
   const [isPaused, setIsPaused] = useState(true);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [showCompletionModal, setShowCompletionModal] = useState(false);
+
+  // Prevents the completion popup from firing more than once for the
+  // same "playlist ended" moment.
+  const completionShownRef = useRef(false);
+
+  // Tracks whether playback was actively going, so we can distinguish
+  // "song just ended naturally" from "nothing has played yet".
+  const wasPlayingRef = useRef(false);
+
+  // Tracks whether the CURRENT track has actually made real progress
+  // (a few real seconds), so a buffering blip right at track-start —
+  // which can briefly report paused + position 0 — doesn't get
+  // mistaken for "the playlist just finished". Reset per track.
+  const hasProgressedRef = useRef(false);
 
   // Tracks the most recent reshuffle so a slower, older request can't
   // queue its (stale) songs after a newer one already has.
@@ -67,11 +82,56 @@ function App() {
           playQueueFrom(0, songsToPlay);
         }
 
+        // Reset the "has this actually played for a bit" guard whenever
+        // we land on a genuinely different track.
+        if (prevTrackId !== newTrackId) {
+          hasProgressedRef.current = false;
+        }
+        // Mark real progress once we're a few seconds into the track —
+        // this is what separates a startup buffering blip from an
+        // actual natural ending later on.
+        if (state.position > 3000) {
+          hasProgressedRef.current = true;
+        }
+
         prevTrackIdRef.current = newTrackId;
         setCurrentTrackId(newTrackId);
         setIsPaused(state.paused);
         setPosition(state.position);
         setDuration(state.duration);
+
+        // Detect "the whole playlist just finished". When a track ends
+        // naturally (rather than being paused by the user mid-song),
+        // Spotify's SDK typically reports paused:true with position
+        // reset to 0 — not sitting at the end. So the real signal here
+        // is: the track had genuinely been playing for a while, then
+        // abruptly went to paused + position 0 + nothing queued next.
+        const wasPlaying = wasPlayingRef.current;
+        const noNextTracks =
+          !state.track_window.next_tracks ||
+          state.track_window.next_tracks.length === 0;
+        const looksLikeNaturalEnd =
+          state.position === 0 || state.position >= state.duration - 1000;
+
+        if (
+          wasPlaying &&
+          hasProgressedRef.current &&
+          state.paused &&
+          noNextTracks &&
+          looksLikeNaturalEnd &&
+          !pendingSongsRef.current &&
+          !completionShownRef.current
+        ) {
+          completionShownRef.current = true;
+          setShowCompletionModal(true);
+        }
+
+        if (!state.paused) {
+          // Actively playing — reset guards so the popup can fire
+          // again for a future playlist ending.
+          completionShownRef.current = false;
+        }
+        wasPlayingRef.current = !state.paused;
       });
 
       spotifyPlayer.connect();
@@ -166,6 +226,19 @@ function App() {
         body: JSON.stringify({ uris }),
       }
     );
+    // Force repeat off — otherwise Spotify's device-level repeat
+    // setting (often left on from a previous session) will just
+    // loop the last track instead of actually stopping, and our
+    // "playlist finished" popup would never get a chance to fire.
+    await fetch(
+      `https://api.spotify.com/v1/me/player/repeat?state=off&device_id=${deviceId}`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
   };
 
   const togglePlay = () => {
@@ -209,6 +282,21 @@ function App() {
     window.history.replaceState({}, "", "/");
   };
 
+  // Dismisses the "playlist finished" popup and resets the screen back
+  // to the paste-a-link view, ready to shuffle a new playlist. Keeps
+  // the user logged in and the player connected — only the song list
+  // and current track get cleared.
+  const handleContinueAfterCompletion = () => {
+    setShowCompletionModal(false);
+    completionShownRef.current = false;
+    wasPlayingRef.current = false;
+    hasProgressedRef.current = false;
+    setSongs([]);
+    setPlaylistUrl("");
+    setCurrentTrackId(null);
+    setError("");
+  };
+
   if (!token) {
     return (
       <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center px-4">
@@ -230,7 +318,21 @@ function App() {
   const currentSong = songs.find((s) => s.id === currentTrackId);
 
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col items-center px-4 py-12 pb-32 relative">
+    <>
+      {/* Blurred album art background — a plain fixed layer sitting
+          behind the app content, swapped whenever the track changes. */}
+      <div className="fixed inset-0 z-0 bg-black overflow-hidden">
+        {currentSong?.image && (
+          <div
+            key={currentSong.id}
+            className="absolute inset-0 bg-cover bg-center scale-110 blur-xl opacity-40"
+            style={{ backgroundImage: `url(${currentSong.image})` }}
+          />
+        )}
+        <div className="absolute inset-0 bg-black/60" />
+      </div>
+
+      <div className="relative z-10 min-h-screen text-white flex flex-col items-center px-4 py-12 pb-32">
       <button
         onClick={handleLogout}
         className="absolute top-6 right-6 text-gray-400 hover:text-white text-sm border border-gray-700 rounded-full px-4 py-2"
@@ -297,7 +399,7 @@ function App() {
       )}
 
       {currentSong && (
-        <div className="fixed bottom-0 left-0 w-full bg-gray-900 border-t border-gray-700 px-6 py-4 flex flex-col gap-2">
+        <div className="fixed bottom-0 left-0 w-full bg-gray-900/80 backdrop-blur-md border-t border-gray-700 px-6 py-4 flex flex-col gap-2">
           <div className="flex items-center gap-2 w-full max-w-3xl mx-auto">
             <span className="text-xs text-gray-400 w-10 text-right">
               {formatTime(position)}
@@ -352,7 +454,25 @@ function App() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+
+      {showCompletionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl px-8 py-10 max-w-sm w-full text-center">
+            <h2 className="text-2xl font-bold mb-3">🎉 There you go!</h2>
+            <p className="text-gray-300 mb-8">
+              You've completed your playlist. Continue to use Serendify.
+            </p>
+            <button
+              onClick={handleContinueAfterCompletion}
+              className="bg-green-500 hover:bg-green-400 text-black font-bold py-3 px-8 rounded-full"
+            >
+              Continue
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
