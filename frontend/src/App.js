@@ -382,6 +382,35 @@ function App() {
         className="min-h-screen flex items-center justify-center px-4 relative overflow-hidden"
         style={{ background: "radial-gradient(ellipse at 50% 30%, #16181c 0%, #0a0a0c 65%)" }}
       >
+        {/* Ambient green glows drifting in the corners — fills the flat
+            black space with light that feels like it's coming from
+            somewhere, rather than a flat void. Kept low-opacity and
+            large so it reads as atmosphere, not a spotlight. */}
+        <div
+          className="absolute rounded-full pointer-events-none"
+          style={{
+            width: "700px",
+            height: "700px",
+            top: "-220px",
+            left: "-220px",
+            background:
+              "radial-gradient(circle, rgba(29,185,84,0.16) 0%, rgba(29,185,84,0) 70%)",
+            filter: "blur(10px)",
+          }}
+        />
+        <div
+          className="absolute rounded-full pointer-events-none"
+          style={{
+            width: "800px",
+            height: "800px",
+            bottom: "-280px",
+            right: "-260px",
+            background:
+              "radial-gradient(circle, rgba(29,185,84,0.13) 0%, rgba(29,185,84,0) 70%)",
+            filter: "blur(10px)",
+          }}
+        />
+
         {/* Signature element: a slowly spinning vinyl record, rendered
             in pure CSS — a nod to physical shuffle/rotation, not a
             generic gradient blob. Sits behind the login card. */}
@@ -395,7 +424,9 @@ function App() {
             transform: "translate(-50%, -50%)",
             background:
               "repeating-radial-gradient(circle at center, #1c1e22 0px, #1c1e22 2px, #232529 3px, #232529 6px)",
-            boxShadow: "0 0 120px rgba(29,185,84,0.06)",
+            border: "1px solid rgba(29,185,84,0.25)",
+            boxShadow:
+              "0 0 90px rgba(29,185,84,0.35), 0 0 200px rgba(29,185,84,0.15)",
             animation: "spin 40s linear infinite",
           }}
         >
@@ -430,28 +461,36 @@ function App() {
         `}</style>
 
         {/* Glass card holding the actual content, floating above the
-            record so the record reads as atmosphere, not clutter. */}
+            record so the record reads as atmosphere, not clutter.
+            Rendered as a true circle (equal width/height) with a soft
+            yellow glow layered alongside the existing green tones. */}
         <div
-          className="relative z-10 flex flex-col items-center text-center px-10 py-14 rounded-3xl max-w-md w-full"
+          className="relative z-10 flex flex-col items-center justify-center text-center rounded-full"
           style={{
+            width: "420px",
+            height: "420px",
+            padding: "0 48px",
             background: "rgba(15,16,19,0.55)",
             backdropFilter: "blur(24px)",
             border: "1px solid rgba(255,255,255,0.08)",
-            boxShadow: "0 30px 80px rgba(0,0,0,0.5)",
+            boxShadow:
+              "0 30px 80px rgba(0,0,0,0.5), 0 0 100px rgba(29,185,84,0.08), 0 0 70px rgba(255,214,102,0.12)",
           }}
         >
           <h1
-            className="text-6xl mb-4 tracking-tight"
+            className="text-5xl mb-3 tracking-tight"
             style={{
               fontFamily: "'Space Grotesk', sans-serif",
               fontWeight: 700,
               color: "#f2f2f0",
+              textShadow:
+                "0 0 25px rgba(29,185,84,0.55), 0 0 60px rgba(29,185,84,0.3)",
             }}
           >
             Serendify
           </h1>
           <p
-            className="mb-10 text-[15px] leading-relaxed"
+            className="mb-6 text-[13px] leading-snug"
             style={{
               fontFamily: "'Inter', sans-serif",
               color: "#9a9ca3",
@@ -462,12 +501,12 @@ function App() {
           </p>
           <a
             href="http://127.0.0.1:5000/login"
-            className="font-semibold text-base transition-transform duration-150 hover:scale-105 active:scale-95"
+            className="font-semibold text-sm transition-transform duration-150 hover:scale-105 active:scale-95"
             style={{
               fontFamily: "'Inter', sans-serif",
               background: "#1DB954",
               color: "#06170c",
-              padding: "16px 44px",
+              padding: "12px 32px",
               borderRadius: "999px",
               boxShadow: "0 8px 30px rgba(29,185,84,0.35)",
             }}
@@ -532,35 +571,52 @@ function App() {
           <h2 className="text-xl font-semibold mb-4">
             Your Serendified Playlist
           </h2>
-          {songs.map((song, index) => (
-            <div
-              key={song.id}
-              className="flex items-center gap-5 bg-gray-900 rounded-xl p-4 mb-3"
-            >
-              <span className="text-gray-500 w-6 text-right text-base">
-                {index + 1}
-              </span>
-              {song.image && (
-                <img
-                  src={song.image}
-                  alt={song.name}
-                  className="w-16 h-16 rounded-lg object-cover"
-                />
-              )}
-              <div className="min-w-0">
-                <p className="font-semibold text-lg truncate">{song.name}</p>
-                <p className="text-gray-400 text-base truncate">
-                  {song.artist}
-                </p>
-              </div>
-              <button
-                onClick={() => playQueueFrom(index)}
-                className="ml-auto text-green-400 text-base hover:underline shrink-0"
+          {songs.map((song, index) => {
+            const isActive = currentTrackId === song.id && !isPaused;
+            return (
+              <div
+                key={song.id}
+                className={`flex items-center gap-5 rounded-xl p-4 mb-3 border transition-colors ${
+                  isActive
+                    ? "bg-green-500/10 border-green-500/40"
+                    : "bg-gray-900 border-transparent"
+                }`}
               >
-                {currentTrackId === song.id && !isPaused ? "Playing" : "Play"}
-              </button>
-            </div>
-          ))}
+                <span
+                  className={`w-6 text-right text-base ${
+                    isActive ? "text-green-400" : "text-gray-500"
+                  }`}
+                >
+                  {index + 1}
+                </span>
+                {song.image && (
+                  <img
+                    src={song.image}
+                    alt={song.name}
+                    className="w-16 h-16 rounded-lg object-cover"
+                  />
+                )}
+                <div className="min-w-0">
+                  <p
+                    className={`font-semibold text-lg truncate ${
+                      isActive ? "text-green-400" : ""
+                    }`}
+                  >
+                    {song.name}
+                  </p>
+                  <p className="text-gray-400 text-base truncate">
+                    {song.artist}
+                  </p>
+                </div>
+                <button
+                  onClick={() => playQueueFrom(index)}
+                  className="ml-auto text-green-400 text-base hover:underline shrink-0"
+                >
+                  {isActive ? "Playing" : "Play"}
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -637,9 +693,9 @@ function App() {
       {showCompletionModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
           <div className="bg-gray-900 border border-gray-700 rounded-2xl px-8 py-10 max-w-sm w-full text-center">
-            <h2 className="text-2xl font-bold mb-3">There you go!</h2>
+            <h2 className="text-2xl font-bold mb-3">🎉 There you go!</h2>
             <p className="text-gray-300 mb-8">
-                You've completed your playlist. Continue to use Serendify.
+              You've completed your playlist. Continue to use Serendify.
             </p>
             <button
               onClick={handleContinueAfterCompletion}
