@@ -522,9 +522,16 @@ function App() {
 
   return (
     <>
+      {/* Base ambient background — same near-black stage as the login
+          screen, sitting beneath the blurred album art layer. */}
+      <div
+        className="fixed inset-0 z-0"
+        style={{ background: "radial-gradient(ellipse at 50% 20%, #16181c 0%, #0a0a0c 65%)" }}
+      />
+
       {/* Blurred album art background — a plain fixed layer sitting
           behind the app content, swapped whenever the track changes. */}
-      <div className="fixed inset-0 z-0 bg-black overflow-hidden">
+      <div className="fixed inset-0 z-0 overflow-hidden">
         {currentSong?.image && (
           <div
             key={currentSong.id}
@@ -532,20 +539,33 @@ function App() {
             style={{ backgroundImage: `url(${currentSong.image})` }}
           />
         )}
-        <div className="absolute inset-0 bg-black/60" />
+        <div className="absolute inset-0 bg-black/50" />
       </div>
 
       <div className="relative z-10 min-h-screen text-white flex flex-col items-center px-4 py-12 pb-32">
       <button
         onClick={handleLogout}
-        className="absolute top-6 right-6 text-gray-400 hover:text-white text-sm border border-gray-700 rounded-full px-4 py-2"
+        className="absolute top-6 right-6 text-gray-400 hover:text-white text-sm border border-white/10 rounded-full px-4 py-2 transition-colors"
+        style={{ fontFamily: "'Inter', sans-serif" }}
       >
         Log out
       </button>
 
-      <h1 className="text-5xl font-bold mb-2">Serendify</h1>
-      <p className="text-gray-400 mb-10 text-center">
-        Paste your playlist and let us do the rest.
+      <h1
+        className="text-5xl mb-2 tracking-tight"
+        style={{
+          fontFamily: "'Space Grotesk', sans-serif",
+          fontWeight: 700,
+          textShadow: "0 0 20px rgba(29,185,84,0.35)",
+        }}
+      >
+        Serendify
+      </h1>
+      <p
+        className="text-gray-400 mb-10 text-center"
+        style={{ fontFamily: "'Inter', sans-serif" }}
+      >
+        Give your playlist and enjoy shuffling!!
       </p>
 
       <div className="flex gap-3 w-full max-w-2xl mb-10">
@@ -554,11 +574,23 @@ function App() {
           placeholder="Paste your Spotify playlist link..."
           value={playlistUrl}
           onChange={(e) => setPlaylistUrl(e.target.value)}
-          className="flex-1 bg-gray-900 border border-gray-700 rounded-full px-5 py-3 text-white outline-none"
+          className="flex-1 rounded-full px-5 py-3 text-white outline-none border transition-colors focus:border-green-500/50"
+          style={{
+            fontFamily: "'Inter', sans-serif",
+            background: "rgba(255,255,255,0.04)",
+            borderColor: "rgba(255,255,255,0.1)",
+          }}
         />
         <button
           onClick={handleSerendify}
-          className="bg-green-500 hover:bg-green-400 text-black font-bold py-3 px-6 rounded-full"
+          className="font-semibold rounded-full transition-transform duration-150 hover:scale-105 active:scale-95"
+          style={{
+            fontFamily: "'Inter', sans-serif",
+            background: "#1DB954",
+            color: "#06170c",
+            padding: "12px 28px",
+            boxShadow: "0 8px 24px rgba(29,185,84,0.3)",
+          }}
         >
           {loading ? "Shuffling..." : "Serendify!"}
         </button>
@@ -568,7 +600,10 @@ function App() {
 
       {songs.length > 0 && (
         <div className="w-full max-w-2xl">
-          <h2 className="text-xl font-semibold mb-4">
+          <h2
+            className="text-xl font-semibold mb-4"
+            style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+          >
             Your Serendified Playlist
           </h2>
           {songs.map((song, index) => {
@@ -579,8 +614,13 @@ function App() {
                 className={`flex items-center gap-5 rounded-xl p-4 mb-3 border transition-colors ${
                   isActive
                     ? "bg-green-500/10 border-green-500/40"
-                    : "bg-gray-900 border-transparent"
+                    : "border-white/5"
                 }`}
+                style={
+                  isActive
+                    ? undefined
+                    : { background: "rgba(255,255,255,0.03)" }
+                }
               >
                 <span
                   className={`w-6 text-right text-base ${
@@ -621,8 +661,30 @@ function App() {
       )}
 
       {currentSong && (
-        <div className="fixed bottom-0 left-0 w-full bg-gray-900/90 backdrop-blur-lg border-t border-white/10 shadow-[0_-8px_30px_rgba(0,0,0,0.4)] px-6 py-3 rounded-t-2xl">
-          <div className="grid grid-cols-3 items-center max-w-4xl mx-auto gap-4">
+        <div
+          className="fixed bottom-0 left-0 w-full px-6 py-3 rounded-t-2xl relative z-20"
+          style={{
+            background:
+              "linear-gradient(180deg, rgba(20,22,26,0.75) 0%, rgba(10,10,12,0.92) 100%)",
+            backdropFilter: "blur(20px)",
+            boxShadow:
+              "0 -8px 40px rgba(0,0,0,0.5), 0 -1px 0 rgba(29,185,84,0.25)",
+          }}
+        >
+          {/* Soft green glow line along the top edge, echoing the
+              login screen's palette rather than a flat gray border. */}
+          <div
+            className="absolute top-0 left-0 w-full h-px"
+            style={{
+              background:
+                "linear-gradient(90deg, transparent 0%, rgba(29,185,84,0.6) 50%, transparent 100%)",
+            }}
+          />
+
+          <div
+            className="grid grid-cols-3 items-center max-w-4xl mx-auto gap-4 relative"
+            style={{ fontFamily: "'Inter', sans-serif" }}
+          >
             {/* Song info */}
             <div className="flex items-center gap-3 min-w-0">
               {currentSong.image && (
@@ -693,7 +755,7 @@ function App() {
       {showCompletionModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
           <div className="bg-gray-900 border border-gray-700 rounded-2xl px-8 py-10 max-w-sm w-full text-center">
-            <h2 className="text-2xl font-bold mb-3">🎉 There you go!</h2>
+            <h2 className="text-2xl font-bold mb-3"> There you go!</h2>
             <p className="text-gray-300 mb-8">
               You've completed your playlist. Continue to use Serendify.
             </p>
