@@ -42,14 +42,69 @@ function App() {
   // state so we don't need side effects inside a state updater.
   const prevTrackIdRef = useRef(null);
 
+  // --- Token refresh tracking ---
+  // Spotify access tokens expire after 1 hour. Rather than let calls
+  // silently fail once that happens (which is exactly what caused the
+  // confusing 502-style errors during testing), we track the refresh
+  // token and expiry time, and transparently refresh before any call
+  // that needs a token — including the SDK's own internal requests.
+  const refreshTokenRef = useRef(null);
+  const tokenExpiresAtRef = useRef(null); // epoch ms
+  // Always holds the latest known-good access token. Kept in sync with
+  // the `token` state below, but readable synchronously from inside
+  // callbacks (like the SDK's getOAuthToken) without waiting on React.
+  const accessTokenRef = useRef(null);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const accessToken = params.get("access_token");
     if (accessToken) {
       setToken(accessToken);
+      accessTokenRef.current = accessToken;
+      refreshTokenRef.current = params.get("refresh_token");
+      const expiresIn = parseInt(params.get("expires_in"), 10) || 3600;
+      // Refresh a little early (60s buffer) rather than cutting it
+      // exactly at the expiry boundary.
+      tokenExpiresAtRef.current = Date.now() + (expiresIn - 60) * 1000;
       window.history.replaceState({}, "", "/");
     }
   }, []);
+
+  // Returns a currently-valid access token, transparently refreshing
+  // it first if it's expired (or about to expire). Every Spotify API
+  // call — and the SDK's own token requests — should go through this
+  // instead of reading `token` directly, so a stale token never
+  // silently causes calls to fail.
+  const getValidAccessToken = async () => {
+    const stillValid =
+      tokenExpiresAtRef.current && Date.now() < tokenExpiresAtRef.current;
+    if (stillValid) return accessTokenRef.current;
+
+    if (!refreshTokenRef.current) {
+      // No refresh token available (shouldn't normally happen) —
+      // fall back to whatever we have rather than crashing.
+      return accessTokenRef.current;
+    }
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:5000/refresh_token?refresh_token=${refreshTokenRef.current}`
+      );
+      const data = await response.json();
+      if (data.error) {
+        console.error("Token refresh failed:", data.error);
+        return accessTokenRef.current;
+      }
+      accessTokenRef.current = data.access_token;
+      refreshTokenRef.current = data.refresh_token;
+      tokenExpiresAtRef.current = Date.now() + (data.expires_in - 60) * 1000;
+      setToken(data.access_token);
+      return data.access_token;
+    } catch (err) {
+      console.error("Token refresh request failed:", err);
+      return accessTokenRef.current;
+    }
+  };
 
   useEffect(() => {
     if (!token) return;
@@ -57,7 +112,9 @@ function App() {
     const initPlayer = () => {
       const spotifyPlayer = new window.Spotify.Player({
         name: "Serendify Player",
-        getOAuthToken: (cb) => cb(token),
+        getOAuthToken: (cb) => {
+          getValidAccessToken().then(cb);
+        },
         volume: 0.5,
       });
 
@@ -170,11 +227,12 @@ function App() {
     setLoading(true);
     setError("");
     try {
+      const validToken = await getValidAccessToken();
       const response = await fetch("http://127.0.0.1:5000/shuffle", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${validToken}`,
         },
         body: JSON.stringify({ playlist_url: playlistUrl }),
       });
@@ -206,6 +264,23 @@ function App() {
     setLoading(false);
   };
 
+  // Spotify's Web API is known to intermittently return 502 (Bad
+  // Gateway) on /me/player/play and related endpoints, especially
+  // right after a track transition. This isn't something in our
+  // control — it's a documented, widely-reported flakiness on
+  // Spotify's own servers. Retrying after a short delay reliably
+  // works around it.
+  const fetchWithRetry = async (url, options, retries = 3, delayMs = 600) => {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const response = await fetch(url, options);
+      if (response.status !== 502) return response;
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    return null;
+  };
+
   const playQueueFrom = async (index, songList = songs) => {
     if (!deviceId) return;
     // A direct play call takes precedence — drop any reshuffle that
@@ -215,13 +290,14 @@ function App() {
     const uris = songList
       .slice(index, index + MAX_QUEUE_SIZE)
       .map((s) => `spotify:track:${s.id}`);
-    await fetch(
+    const validToken = await getValidAccessToken();
+    await fetchWithRetry(
       `https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`,
       {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${validToken}`,
         },
         body: JSON.stringify({ uris }),
       }
@@ -230,12 +306,12 @@ function App() {
     // setting (often left on from a previous session) will just
     // loop the last track instead of actually stopping, and our
     // "playlist finished" popup would never get a chance to fire.
-    await fetch(
+    await fetchWithRetry(
       `https://api.spotify.com/v1/me/player/repeat?state=off&device_id=${deviceId}`,
       {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${validToken}`,
         },
       }
     );
@@ -272,6 +348,9 @@ function App() {
       player.disconnect();
     }
     setToken(null);
+    accessTokenRef.current = null;
+    refreshTokenRef.current = null;
+    tokenExpiresAtRef.current = null;
     setPlayer(null);
     setDeviceId(null);
     setCurrentTrackId(null);
@@ -299,18 +378,103 @@ function App() {
 
   if (!token) {
     return (
-      <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center px-4">
-        <h1 className="text-6xl font-bold mb-4">Serendify</h1>
-        <p className="text-gray-400 text-xl mb-2 text-center">
-          Spotify's shuffle is broken.
-        </p>
-        <p className="text-gray-400 text-xl mb-10 text-center">We fixed it.</p>
-        <a
-          href="http://127.0.0.1:5000/login"
-          className="bg-green-500 hover:bg-green-400 text-black font-bold py-4 px-10 rounded-full text-lg"
+      <div
+        className="min-h-screen flex items-center justify-center px-4 relative overflow-hidden"
+        style={{ background: "radial-gradient(ellipse at 50% 30%, #16181c 0%, #0a0a0c 65%)" }}
+      >
+        {/* Signature element: a slowly spinning vinyl record, rendered
+            in pure CSS — a nod to physical shuffle/rotation, not a
+            generic gradient blob. Sits behind the login card. */}
+        <div
+          className="absolute rounded-full"
+          style={{
+            width: "560px",
+            height: "560px",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            background:
+              "repeating-radial-gradient(circle at center, #1c1e22 0px, #1c1e22 2px, #232529 3px, #232529 6px)",
+            boxShadow: "0 0 120px rgba(29,185,84,0.06)",
+            animation: "spin 40s linear infinite",
+          }}
         >
-          Login with Spotify
-        </a>
+          <div
+            className="absolute rounded-full"
+            style={{
+              width: "160px",
+              height: "160px",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              background: "radial-gradient(circle at 40% 35%, #2bd968 0%, #14251a 70%)",
+            }}
+          />
+          <div
+            className="absolute rounded-full bg-black"
+            style={{
+              width: "18px",
+              height: "18px",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+            }}
+          />
+        </div>
+
+        <style>{`
+          @keyframes spin {
+            from { transform: translate(-50%, -50%) rotate(0deg); }
+            to { transform: translate(-50%, -50%) rotate(360deg); }
+          }
+        `}</style>
+
+        {/* Glass card holding the actual content, floating above the
+            record so the record reads as atmosphere, not clutter. */}
+        <div
+          className="relative z-10 flex flex-col items-center text-center px-10 py-14 rounded-3xl max-w-md w-full"
+          style={{
+            background: "rgba(15,16,19,0.55)",
+            backdropFilter: "blur(24px)",
+            border: "1px solid rgba(255,255,255,0.08)",
+            boxShadow: "0 30px 80px rgba(0,0,0,0.5)",
+          }}
+        >
+          <h1
+            className="text-6xl mb-4 tracking-tight"
+            style={{
+              fontFamily: "'Space Grotesk', sans-serif",
+              fontWeight: 700,
+              color: "#f2f2f0",
+            }}
+          >
+            Serendify
+          </h1>
+          <p
+            className="mb-10 text-[15px] leading-relaxed"
+            style={{
+              fontFamily: "'Inter', sans-serif",
+              color: "#9a9ca3",
+            }}
+          >
+            Frustrated with Spotify's shuffle? Enjoy your favourite
+            playlists entirely — with Serendify.
+          </p>
+          <a
+            href="http://127.0.0.1:5000/login"
+            className="font-semibold text-base transition-transform duration-150 hover:scale-105 active:scale-95"
+            style={{
+              fontFamily: "'Inter', sans-serif",
+              background: "#1DB954",
+              color: "#06170c",
+              padding: "16px 44px",
+              borderRadius: "999px",
+              boxShadow: "0 8px 30px rgba(29,185,84,0.35)",
+            }}
+          >
+            Login with Spotify
+          </a>
+        </div>
       </div>
     );
   }
@@ -345,7 +509,7 @@ function App() {
         Paste your playlist and let us do the rest.
       </p>
 
-      <div className="flex gap-3 w-full max-w-xl mb-10">
+      <div className="flex gap-3 w-full max-w-2xl mb-10">
         <input
           type="text"
           placeholder="Paste your Spotify playlist link..."
@@ -364,32 +528,34 @@ function App() {
       {error && <p className="text-red-400 mb-6">{error}</p>}
 
       {songs.length > 0 && (
-        <div className="w-full max-w-xl">
+        <div className="w-full max-w-2xl">
           <h2 className="text-xl font-semibold mb-4">
             Your Serendified Playlist
           </h2>
           {songs.map((song, index) => (
             <div
               key={song.id}
-              className="flex items-center gap-4 bg-gray-900 rounded-xl p-3 mb-3"
+              className="flex items-center gap-5 bg-gray-900 rounded-xl p-4 mb-3"
             >
-              <span className="text-gray-500 w-6 text-right">
+              <span className="text-gray-500 w-6 text-right text-base">
                 {index + 1}
               </span>
               {song.image && (
                 <img
                   src={song.image}
                   alt={song.name}
-                  className="w-12 h-12 rounded-lg"
+                  className="w-16 h-16 rounded-lg object-cover"
                 />
               )}
-              <div>
-                <p className="font-semibold">{song.name}</p>
-                <p className="text-gray-400 text-sm">{song.artist}</p>
+              <div className="min-w-0">
+                <p className="font-semibold text-lg truncate">{song.name}</p>
+                <p className="text-gray-400 text-base truncate">
+                  {song.artist}
+                </p>
               </div>
               <button
                 onClick={() => playQueueFrom(index)}
-                className="ml-auto text-green-400 text-sm hover:underline"
+                className="ml-auto text-green-400 text-base hover:underline shrink-0"
               >
                 {currentTrackId === song.id && !isPaused ? "Playing" : "Play"}
               </button>
@@ -399,58 +565,70 @@ function App() {
       )}
 
       {currentSong && (
-        <div className="fixed bottom-0 left-0 w-full bg-gray-900/80 backdrop-blur-md border-t border-gray-700 px-6 py-4 flex flex-col gap-2">
-          <div className="flex items-center gap-2 w-full max-w-3xl mx-auto">
-            <span className="text-xs text-gray-400 w-10 text-right">
-              {formatTime(position)}
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={duration || 0}
-              value={position}
-              onChange={handleSeek}
-              className="flex-1 accent-green-500"
-            />
-            <span className="text-xs text-gray-400 w-10">
-              {formatTime(duration)}
-            </span>
-          </div>
+        <div className="fixed bottom-0 left-0 w-full bg-gray-900/90 backdrop-blur-lg border-t border-white/10 shadow-[0_-8px_30px_rgba(0,0,0,0.4)] px-6 py-3 rounded-t-2xl">
+          <div className="grid grid-cols-3 items-center max-w-4xl mx-auto gap-4">
+            {/* Song info */}
+            <div className="flex items-center gap-3 min-w-0">
+              {currentSong.image && (
+                <img
+                  src={currentSong.image}
+                  alt={currentSong.name}
+                  className="w-14 h-14 rounded-lg shadow-md object-cover"
+                />
+              )}
+              <div className="min-w-0">
+                <p className="font-semibold truncate">{currentSong.name}</p>
+                <p className="text-gray-400 text-sm truncate">
+                  {currentSong.artist}
+                </p>
+              </div>
+            </div>
 
-          <div className="flex items-center gap-4">
-            {currentSong.image && (
-              <img
-                src={currentSong.image}
-                alt={currentSong.name}
-                className="w-12 h-12 rounded-lg"
-              />
-            )}
-            <div className="flex-1">
-              <p className="font-semibold">{currentSong.name}</p>
-              <p className="text-gray-400 text-sm">{currentSong.artist}</p>
+            {/* Transport controls + seek bar */}
+            <div className="flex flex-col items-center gap-1">
+              <div className="flex items-center gap-5">
+                <button
+                  onClick={skipPrevious}
+                  className="text-gray-400 hover:text-white text-xl transition-colors hover:scale-110 active:scale-95 duration-150"
+                  title="Previous"
+                >
+                  ⏮
+                </button>
+                <button
+                  onClick={togglePlay}
+                  className="bg-white text-black w-10 h-10 flex items-center justify-center rounded-full hover:scale-105 active:scale-95 transition-transform shadow-md"
+                  title={isPaused ? "Play" : "Pause"}
+                >
+                  {isPaused ? "▶" : "⏸"}
+                </button>
+                <button
+                  onClick={skipNext}
+                  className="text-gray-400 hover:text-white text-xl transition-colors hover:scale-110 active:scale-95 duration-150"
+                  title="Next"
+                >
+                  ⏭
+                </button>
+              </div>
+              <div className="flex items-center gap-2 w-full max-w-md">
+                <span className="text-[11px] text-gray-500 w-9 text-right tabular-nums">
+                  {formatTime(position)}
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={duration || 0}
+                  value={position}
+                  onChange={handleSeek}
+                  className="flex-1 h-1 accent-green-500 cursor-pointer"
+                />
+                <span className="text-[11px] text-gray-500 w-9 tabular-nums">
+                  {formatTime(duration)}
+                </span>
+              </div>
             </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={skipPrevious}
-                className="text-gray-300 hover:text-white text-2xl px-2"
-                title="Previous"
-              >
-                ⏮
-              </button>
-              <button
-                onClick={togglePlay}
-                className="bg-green-500 hover:bg-green-400 text-black font-bold py-2 px-6 rounded-full"
-              >
-                {isPaused ? "Play" : "Pause"}
-              </button>
-              <button
-                onClick={skipNext}
-                className="text-gray-300 hover:text-white text-2xl px-2"
-                title="Next"
-              >
-                ⏭
-              </button>
-            </div>
+
+            {/* Spacer to balance the grid (keeps controls visually centered) */}
+            <div />
           </div>
         </div>
       )}
@@ -459,9 +637,9 @@ function App() {
       {showCompletionModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
           <div className="bg-gray-900 border border-gray-700 rounded-2xl px-8 py-10 max-w-sm w-full text-center">
-            <h2 className="text-2xl font-bold mb-3">🎉 There you go!</h2>
+            <h2 className="text-2xl font-bold mb-3">There you go!</h2>
             <p className="text-gray-300 mb-8">
-              You've completed your playlist. Continue to use Serendify.
+                You've completed your playlist. Continue to use Serendify.
             </p>
             <button
               onClick={handleContinueAfterCompletion}

@@ -79,7 +79,34 @@ def callback():
     code = request.args.get("code")
     token_info = get_spotify_oauth().get_access_token(code)
     access_token = token_info['access_token']
-    return redirect(f"http://localhost:3000?access_token={access_token}")
+    refresh_token = token_info['refresh_token']
+    expires_in = token_info['expires_in']
+    return redirect(
+        f"http://localhost:3000"
+        f"?access_token={access_token}"
+        f"&refresh_token={refresh_token}"
+        f"&expires_in={expires_in}"
+    )
+
+
+@app.route("/refresh_token")
+def refresh_token_route():
+    refresh_token = request.args.get("refresh_token")
+    if not refresh_token:
+        return jsonify({"error": "Missing refresh_token"}), 400
+
+    try:
+        token_info = get_spotify_oauth().refresh_access_token(refresh_token)
+    except Exception as e:
+        return jsonify({"error": f"Could not refresh token: {str(e)}"}), 400
+
+    return jsonify({
+        "access_token": token_info["access_token"],
+        # Spotify doesn't always return a new refresh_token — if it
+        # doesn't, the old one is still valid and reusable.
+        "refresh_token": token_info.get("refresh_token", refresh_token),
+        "expires_in": token_info["expires_in"]
+    })
 
 
 @app.route("/shuffle", methods=["POST"])
