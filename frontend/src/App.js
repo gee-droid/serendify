@@ -519,6 +519,11 @@ function App() {
   }
 
   const currentSong = songs.find((s) => s.id === currentTrackId);
+  // Drives the popup player's entrance/exit animation. The player card
+  // stays mounted at all times (rather than being conditionally
+  // rendered) so the CSS transition can actually animate it sliding
+  // in/out and scaling, instead of just appearing/disappearing instantly.
+  const playerVisible = Boolean(currentSong);
 
   return (
     <>
@@ -659,97 +664,113 @@ function App() {
           })}
         </div>
       )}
+      </div>
 
-      {currentSong && (
+      {/* Popup mini player. Stays mounted permanently (never
+          conditionally rendered) so it can actually animate in/out
+          instead of just snapping into existence. It floats as a
+          rounded card above the bottom of the screen rather than a
+          full-width bar glued to the edge, and combines a slide-up
+          with a scale + bounce so it reads as "popping up" the moment
+          a song starts, and eases back down when nothing's current. */}
+      <div
+        className="fixed bottom-6 left-1/2 z-20 w-[92%] max-w-2xl px-6 py-3 rounded-2xl"
+        style={{
+          transform: playerVisible
+            ? "translate(-50%, 0) scale(1)"
+            : "translate(-50%, 40px) scale(0.9)",
+          opacity: playerVisible ? 1 : 0,
+          transition: playerVisible
+            ? "transform 500ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 350ms ease-out"
+            : "transform 300ms ease-in, opacity 250ms ease-in",
+          pointerEvents: playerVisible ? "auto" : "none",
+          background:
+            "linear-gradient(180deg, rgba(20,22,26,0.88) 0%, rgba(10,10,12,0.96) 100%)",
+          backdropFilter: "blur(20px)",
+          border: "1px solid rgba(255,255,255,0.08)",
+          boxShadow:
+            "0 20px 60px rgba(0,0,0,0.6), 0 0 50px rgba(29,185,84,0.18)",
+        }}
+      >
+        {/* Soft green glow line along the top edge, echoing the
+            login screen's palette rather than a flat gray border. */}
         <div
-          className="fixed bottom-0 left-0 w-full px-6 py-3 rounded-t-2xl relative z-20"
+          className="absolute top-0 left-0 w-full h-px rounded-t-2xl"
           style={{
             background:
-              "linear-gradient(180deg, rgba(20,22,26,0.75) 0%, rgba(10,10,12,0.92) 100%)",
-            backdropFilter: "blur(20px)",
-            boxShadow:
-              "0 -8px 40px rgba(0,0,0,0.5), 0 -1px 0 rgba(29,185,84,0.25)",
+              "linear-gradient(90deg, transparent 0%, rgba(29,185,84,0.6) 50%, transparent 100%)",
           }}
+        />
+
+        <div
+          className="grid grid-cols-3 items-center max-w-4xl mx-auto gap-4 relative"
+          style={{ fontFamily: "'Inter', sans-serif" }}
         >
-          {/* Soft green glow line along the top edge, echoing the
-              login screen's palette rather than a flat gray border. */}
-          <div
-            className="absolute top-0 left-0 w-full h-px"
-            style={{
-              background:
-                "linear-gradient(90deg, transparent 0%, rgba(29,185,84,0.6) 50%, transparent 100%)",
-            }}
-          />
-
-          <div
-            className="grid grid-cols-3 items-center max-w-4xl mx-auto gap-4 relative"
-            style={{ fontFamily: "'Inter', sans-serif" }}
-          >
-            {/* Song info */}
-            <div className="flex items-center gap-3 min-w-0">
-              {currentSong.image && (
-                <img
-                  src={currentSong.image}
-                  alt={currentSong.name}
-                  className="w-14 h-14 rounded-lg shadow-md object-cover"
-                />
-              )}
-              <div className="min-w-0">
-                <p className="font-semibold truncate">{currentSong.name}</p>
-                <p className="text-gray-400 text-sm truncate">
-                  {currentSong.artist}
-                </p>
-              </div>
+          {/* Song info */}
+          <div className="flex items-center gap-3 min-w-0">
+            {currentSong?.image && (
+              <img
+                src={currentSong.image}
+                alt={currentSong.name}
+                className="w-14 h-14 rounded-lg shadow-md object-cover"
+              />
+            )}
+            <div className="min-w-0">
+              <p className="font-semibold truncate">
+                {currentSong?.name ?? ""}
+              </p>
+              <p className="text-gray-400 text-sm truncate">
+                {currentSong?.artist ?? ""}
+              </p>
             </div>
-
-            {/* Transport controls + seek bar */}
-            <div className="flex flex-col items-center gap-1">
-              <div className="flex items-center gap-5">
-                <button
-                  onClick={skipPrevious}
-                  className="text-gray-400 hover:text-white text-xl transition-colors hover:scale-110 active:scale-95 duration-150"
-                  title="Previous"
-                >
-                  ⏮
-                </button>
-                <button
-                  onClick={togglePlay}
-                  className="bg-white text-black w-10 h-10 flex items-center justify-center rounded-full hover:scale-105 active:scale-95 transition-transform shadow-md"
-                  title={isPaused ? "Play" : "Pause"}
-                >
-                  {isPaused ? "▶" : "⏸"}
-                </button>
-                <button
-                  onClick={skipNext}
-                  className="text-gray-400 hover:text-white text-xl transition-colors hover:scale-110 active:scale-95 duration-150"
-                  title="Next"
-                >
-                  ⏭
-                </button>
-              </div>
-              <div className="flex items-center gap-2 w-full max-w-md">
-                <span className="text-[11px] text-gray-500 w-9 text-right tabular-nums">
-                  {formatTime(position)}
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={duration || 0}
-                  value={position}
-                  onChange={handleSeek}
-                  className="flex-1 h-1 accent-green-500 cursor-pointer"
-                />
-                <span className="text-[11px] text-gray-500 w-9 tabular-nums">
-                  {formatTime(duration)}
-                </span>
-              </div>
-            </div>
-
-            {/* Spacer to balance the grid (keeps controls visually centered) */}
-            <div />
           </div>
+
+          {/* Transport controls + seek bar */}
+          <div className="flex flex-col items-center gap-1">
+            <div className="flex items-center gap-5">
+              <button
+                onClick={skipPrevious}
+                className="text-gray-400 hover:text-white text-xl transition-colors hover:scale-110 active:scale-95 duration-150"
+                title="Previous"
+              >
+                ⏮
+              </button>
+              <button
+                onClick={togglePlay}
+                className="bg-white text-black w-10 h-10 flex items-center justify-center rounded-full hover:scale-105 active:scale-95 transition-transform shadow-md"
+                title={isPaused ? "Play" : "Pause"}
+              >
+                {isPaused ? "▶" : "⏸"}
+              </button>
+              <button
+                onClick={skipNext}
+                className="text-gray-400 hover:text-white text-xl transition-colors hover:scale-110 active:scale-95 duration-150"
+                title="Next"
+              >
+                ⏭
+              </button>
+            </div>
+            <div className="flex items-center gap-2 w-full max-w-md">
+              <span className="text-[11px] text-gray-500 w-9 text-right tabular-nums">
+                {formatTime(position)}
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={duration || 0}
+                value={position}
+                onChange={handleSeek}
+                className="flex-1 h-1 accent-green-500 cursor-pointer"
+              />
+              <span className="text-[11px] text-gray-500 w-9 tabular-nums">
+                {formatTime(duration)}
+              </span>
+            </div>
+          </div>
+
+          {/* Spacer to balance the grid (keeps controls visually centered) */}
+          <div />
         </div>
-      )}
       </div>
 
       {showCompletionModal && (
